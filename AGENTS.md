@@ -10,31 +10,35 @@ This block is written and re-added by `next dev` — verify at `node_modules/nex
 
 # Escape Game Next — agent notes
 
-Next 16 + React 19, App Router, JS-only (`.js`/`.jsx`, no TS). No test/lint/typecheck scripts.
+Next 16 + React 19, App Router, TypeScript strict (`.ts`/`.tsx`, `npm run typecheck`).
 
 ## Commands
 - `npm run dev` — dev server on port `5200`, hostname `0.0.0.0` (see `package.json`)
 - `npm run build` / `npm start` — production build/serve, same port
-- No tests, linter, formatter configured. Verify via `npm run build`.
+- `npm run typecheck` — `tsc --noEmit`; `npm run lint` — ESLint flat (`eslint.config.mjs`, Next core-web-vitals + TS)
+- `npm run test` — Vitest unit (`tests/unit`, node) + components (`tests/components`, jsdom); `npm run test:e2e` — Playwright (Chromium, isolierter Store via `GROUP_STORE_PATH=test-results/e2e-store/groups.json`)
+- `npm run verify` — typecheck + lint + test + build. No formatter configured.
 - LAN dev allowed via `allowedDevOrigins` in `next.config.js`; extend there for new device IPs.
 
 ## Architecture
 - Routes: `/` (`GroupGate` create/join) → `/play/[code]` (`GameClient`), `/join` (`AutoJoin`), `/admin/[code]` (`AdminClient`), `/projector` (`ProjectorClient`).
-- State lives in `lib/group-store.js` backed by mutable `data/groups.json` (no DB). `normalizeGroup()` backfills defaults — sparse entries in JSON are normal, not corruption.
-- Game content source of truth: `lib/game-data/stations.js` (20 stations, `solution`, `hints`, `SOLUTIONS`, `FINAL_PASSWORD`). Solutions mirror `EscapeGame_Anti-lomene.pdf` p.22; keep in sync when editing.
-- API: `POST /api/groups` create (optional `{name}`); `GET /api/groups` list for scoreboard (heavy `dataUrl` stripped); `GET/POST /api/groups/[code]` with `body.action` in `reset|solve|settings|rename|timer|unlock|lock|hint|upload|approve-upload|reveal-finale`; `POST /api/groups/join` auto-assigns into pool (`MAX_MEMBERS=3`, groups share `poolCode`).
-- Group fields beyond solved/unlocked: `name`, `attempts`/`errors` per station (counted in `solveStation`, reset keeps `name`), `teamPhoto` (upload with `station: 0`), uploads carry downscaled `dataUrl` (cap `MAX_DATAURL_CHARS`).
-- Timer: `settings.timerMinutes` (presets 45/60/90 in admin) + `timer/adjust` with `minutes` ±30 lands in `elapsedPauseMs` (positive = Bonus). Modes: `linear|open|manual` — `manual` preserves current unlocks, only admin frees stations.
-- Hint levels: use `hintLevelsFor()` from `stations.js` (`hintLevels` wins over `hints`); store `hint` action caps at the same array length. Don't use `station.hints.length` directly.
+- State lives in `lib/group-store.ts` backed by mutable `data/groups.json` (no DB). `normalizeGroup()` backfills defaults — sparse entries in JSON are normal, not corruption. All read-modify-write ops run serialized via `runExclusive` (no lost updates under parallel polls).
+- Game content source of truth: `lib/game-data/stations.ts` (20 stations, `solution`, `hints`, `SOLUTIONS`, `FINAL_PASSWORD`). Solutions mirror `EscapeGame_Anti-lomene.pdf` p.22; keep in sync when editing. Jede Station muss den Renderer-Vertrag ihres `kind` erfüllen (`tests/unit/stations.test.ts` prüft Pflichtfelder — Station 10/12/15 crashten früher mit falschem `kind`).
+- API: `POST /api/groups` create (optional `{name}`); `GET /api/groups` list for scoreboard (heavy `dataUrl` stripped); `GET /api/groups/[code]` **read-only, 404 when missing** (no auto-create); `POST` with `body.action` in `reset|solve|settings|rename|timer|unlock|lock|hint|upload|approve-upload|reveal-finale`; `POST /api/groups/join` with `{memberId, poolCode}` (QR auto-assign, `MAX_MEMBERS=3`) or `{code, memberId}` (explicit join, registers device, 409 when full). Client errors are 400/404/409/413 via `HttpError`, never silent no-ops.
+- Payload carries `letters` (only solved stations) + `finalWord` (only when `revealFinale`) — Finale/Projector never import solutions. Server is the only solve authority; client `check()` awaits `valid` from POST.
+- Group fields beyond solved/unlocked: `name`, `attempts`/`errors` per station (counted in `solveStation`, reset keeps `name`; re-solve is idempotent, empty input is 400 without counting), `teamPhoto` (upload with `station: 0`), uploads carry downscaled `dataUrl` (oversize → 413, not truncation).
+- Timer: `settings.timerMinutes` (presets 45/60/90 in admin) + `timer/adjust` with `minutes` ±30 lands in `elapsedPauseMs` (positive = Bonus). Modes: `linear|open|manual` — `manual` preserves current unlocks, only admin frees stations. Shared helpers in `lib/time.ts` (`remainingLabel`, `elapsedMs` — frozen at `finishedAt`); client clocks may drift, acceptable for event use.
+- Hint levels: use `hintLevelsFor()` from `lib/hints.ts` (`hintLevels` wins over `hints`); store `hint` action caps at the same array length. Don't use `station.hints.length` directly.
 - Uploads: `approve-upload` with `approved:true` auto-solves stations with `kind: 'upload'`. Upload images are client-downscaled (≤1280px JPEG) before POST.
-- Persistence: `lib/store-backend.js` — `GROUP_STORE=json` (default, `data/groups.json`) or `GROUP_STORE=sqlite` (WAL, `data/groups.sqlite`, zero-dep via `node:sqlite`). Same `{groups:{}}` shape; Postgres would implement the same `loadStore/saveStore` interface.
-- Clients poll with `cache: 'no-store'`: projector 1s, game/admin 2s, scoreboard 5s. Offline banner appears after ≥2 consecutive poll failures. Keep polling; no websockets.
-- Extra routes: `/scoreboard` (all groups, ranked), `/print` (print-friendly station cards + Lösungsschlüssel, `window.print` → PDF). Sounds in `lib/sound.js` (WebAudio, no assets).
+- Persistence: `lib/store-backend.ts` — `GROUP_STORE=json` (default, `data/groups.json`) or `GROUP_STORE=sqlite` (WAL, `data/groups.sqlite`, zero-dep via `node:sqlite`). Same `{groups:{}}` shape; Postgres would implement the same `loadStore/saveStore` interface. Memory fallback returns clones (callers mutate).
+- Clients poll with `cache: 'no-store'` via `usePolling()` in `lib/use-polling.ts` (single hook: data/error/offline/loading/reload/ingest): projector 1s, game/admin 2s, scoreboard 5s. Offline banner appears after ≥2 consecutive poll failures. Keep polling; no websockets. POSTs go through `postJson()` in `lib/api-client.ts` (server `{error}` reaches UI).
+- Extra routes: `/scoreboard` (all groups, ranked), `/print` (print-friendly station cards + Lösungsschlüssel, `window.print` → PDF). Sounds in `lib/sound.ts` (WebAudio, no assets). Image-Downscale lebt einmalig in `lib/image.ts` (`PuzzleBody` + `Finale` teilen ihn).
 
 ## Conventions / gotchas
-- Relative imports keep `.js` extension (`../../../lib/group-store.js`); `'use client'` on interactive components.
-- Codes sanitized uppercase alnum (`cleanCode`); answers via `normalizeInput()` (strips `.,` whitespace, leading zeros) — compare numerically, preserve for station 8 mirror logic in `PuzzleBody.jsx`.
+- Relative imports are extensionless (`../../../lib/group-store`); `'use client'` on interactive components. Turbopack does NOT resolve `.js`→`.ts` — never re-add extensions.
+- NEVER import `lib/game-data/stations.ts` (or `SOLUTIONS`/`FINAL_PASSWORD`) into player-facing components (`GameClient`, `StationView`, `PuzzleBody`, `Finale`, `ProjectorClient`) — solutions would ship in the browser bundle. Player code uses `PUBLIC_STATIONS` + `lib/hints.ts` (`normalizeInput`, `hintLevelsFor`); full `STATIONS` is reserved for server code + Leitung (admin/print).
+- Codes sanitized uppercase alnum (`cleanCode`); answers via `normalizeInput()` (strips `.,` whitespace, leading zeros) — compare numerically.
 - Modes: `linear` unlocks `highestSolved+1`, `open` unlocks all (`nextUnlocked`). Station 1 always unlocked; lock action refuses station 1.
-- `GET /api/groups/[code]` auto-creates group if missing — every stray fetch writes to `data/groups.json`. Don't probe random codes in dev; `data/groups.json` is runtime state, don't commit test groups.
-- Uploads store metadata only (`name/size/type/approved`), no file bytes. Finale reveals when all solved (`finishedAt`+`revealFinale`) or via `reveal-finale` action.
+- `GET /api/groups/[code]` is read-only (404 when missing) — safe to poll/probe. `POST /api/groups/join` with `{code}` creates on explicit join only. `data/groups.json` is runtime state, don't commit test groups.
+- Uploads store metadata only (`name/size/type/approved`), no file bytes. Finale reveals when all solved (`finishedAt`+`revealFinale`) or via `reveal-finale` action (also honored alone, like projector).
 - UI language German; global styles only in `app/globals.css`.
