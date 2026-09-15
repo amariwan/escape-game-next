@@ -177,7 +177,7 @@ export default function Finale({ solved, groupState, onRestart, onPhoto }: Final
             </div>
             <div className="btn-row center">
                <button type="button" className="btn ghost" onClick={onRestart}>
-                  ↺ Neustart
+                  ← Zurück zu Stationen
                </button>
             </div>
          </section>

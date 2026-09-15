@@ -252,6 +252,103 @@ describe('join', () => {
    })
 })
 
+describe('anti-cheat: locked-solve + rate-limit', () => {
+   it('gesperrte Station lässt sich nicht lösen → 403 ohne Zähler', async () => {
+      const code = await freshCode()
+      await expectHttpError(solveStation(code, 2, solutionFor(2)), 403)
+      const group = await getGroup(code)
+      expect(group!.attempts[2]).toBe(0)
+      expect(group!.solved[2]).toBeUndefined()
+   })
+
+   it('mehr als 12 Versuche/Minute je Station → 429', async () => {
+      const code = await freshCode()
+      const wrong = solutionFor(1) === '1' ? '2' : '1'
+      for (let i = 0; i < 12; i += 1) {
+         const r = await solveStation(code, 1, wrong)
+         expect(r.valid).toBe(false)
+      }
+      await expectHttpError(solveStation(code, 1, wrong), 429)
+   })
+})
+
+describe('team-follow: activeStation/activePhase', () => {
+   it('startet bei 1/play und wandert bei Solve weiter', async () => {
+      const code = await freshCode()
+      const created = await getGroup(code)
+      expect(created!.activeStation).toBe(1)
+      expect(created!.activePhase).toBe('play')
+      const result = await solveStation(code, 1, solutionFor(1))
+      expect(result.valid).toBe(true)
+      expect(result.group.activeStation).toBe(2)
+   })
+
+   it('navigate setzt Team-Stand, gesperrt → 403', async () => {
+      const code = await freshCode()
+      await expectHttpError(updateGroup(code, 'navigate', { station: 5, phase: 'play' }), 403)
+      let group = await updateGroup(code, 'navigate', { station: 1, phase: 'play' })
+      expect(group.activeStation).toBe(1)
+      expect(group.activePhase).toBe('play')
+      group = await updateGroup(code, 'navigate', { station: 1, phase: 'finale' })
+      expect(group.activePhase).toBe('finale')
+   })
+
+   it('alle 20 → activePhase finale', async () => {
+      const code = await freshCode()
+      for (const s of STATIONS) {
+         await solveStation(code, s.n, String(s.solution))
+      }
+      const group = await getGroup(code)
+      expect(group!.activePhase).toBe('finale')
+   })
+
+   it('reset stellt Team-Stand zurück', async () => {
+      const code = await freshCode()
+      await solveStation(code, 1, solutionFor(1))
+      const group = await resetGroup(code)
+      expect(group.activeStation).toBe(1)
+      expect(group.activePhase).toBe('play')
+   })
+})
+
+describe('admin-passwort', () => {
+   it('ohne ADMIN_PASSWORD bleibt alles offen (dev/tests)', async () => {
+      delete process.env.ADMIN_PASSWORD
+      const code = await freshCode()
+      const group = await updateGroup(code, 'rename', { name: 'offen' })
+      expect(group.name).toBe('offen')
+   })
+
+   it('mit ADMIN_PASSWORD: Admin-Aktionen brauchen Token, Team-Aktionen nicht', async () => {
+      process.env.ADMIN_PASSWORD = 'test-leitung-123'
+      try {
+         const code = await freshCode()
+         await expectHttpError(updateGroup(code, 'rename', { name: 'x' }), 401)
+         await expectHttpError(updateGroup(code, 'settings', { mode: 'open' }), 401)
+         await expectHttpError(updateGroup(code, 'timer', { command: 'start' }), 401)
+         await expectHttpError(updateGroup(code, 'unlock', { station: 3 }), 401)
+         await expectHttpError(updateGroup(code, 'reveal-finale', { reveal: true }), 401)
+         await expectHttpError(resetGroup(code), 401)
+         await expectHttpError(resetGroup(code, 'falsch'), 401)
+
+         // Team-Aktionen bleiben ohne Token möglich …
+         const solved = await solveStation(code, 1, solutionFor(1))
+         expect(solved.valid).toBe(true)
+         const hinted = await updateGroup(code, 'hint', { station: 1 })
+         expect(hinted.hints[1]).toBeGreaterThan(0)
+         const moved = await updateGroup(code, 'navigate', { station: 2, phase: 'play' })
+         expect(moved.activeStation).toBe(2)
+
+         // … und mit Token geht Admin wieder.
+         const renamed = await updateGroup(code, 'rename', { name: 'mit-token', adminToken: 'test-leitung-123' })
+         expect(renamed.name).toBe('mit-token')
+         const reset = await resetGroup(code, 'test-leitung-123')
+         expect(reset.solved).toEqual({})
+      } finally {
+         delete process.env.ADMIN_PASSWORD
+      }
+   })
+})
 describe('unbekannte Gruppe', () => {
    beforeEach(async () => {
       // stellt sicher, dass kein Test versehentlich persistiert

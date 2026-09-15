@@ -1,7 +1,7 @@
 'use client'
 
 import Link from 'next/link'
-import { useCallback, useEffect, useState } from 'react'
+import { useCallback, useState } from 'react'
 import { STATIONS } from '../lib/game-data/stations'
 import { fetchJson, postJson } from '../lib/api-client'
 import { hintLevelsFor } from '../lib/hints'
@@ -16,16 +16,15 @@ export default function AdminClient({ groupCode }: { groupCode: string }) {
    const [timerMinutes, setTimerMinutes] = useState<number | string>(60)
    const [name, setName] = useState('')
    const [actionError, setActionError] = useState('')
-   const [adminToken, setAdminToken] = useState('')
-
    // Spielleitungs-Passwort sitzt nur im Session-Speicher, nie in URL/GET.
-   useEffect(() => {
+   // Lazy-Init statt Effekt — läuft nur clientseitig ('use client').
+   const [adminToken, setAdminToken] = useState(() => {
       try {
-         setAdminToken(window.sessionStorage.getItem(ADMIN_TOKEN_KEY) ?? '')
+         return window.sessionStorage.getItem(ADMIN_TOKEN_KEY) ?? ''
       } catch {
-         // privater Modus o.ä. — Aktionen laufen ohne gespeicherten Token
+         return ''
       }
-   }, [])
+   })
 
    function saveToken(next: string) {
       setAdminToken(next)

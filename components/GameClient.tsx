@@ -1,6 +1,6 @@
 'use client'
 
-import { useCallback, useEffect, useMemo, useState } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { PUBLIC_STATIONS } from '../lib/game-data/stations'
 import { fetchJson, postJson } from '../lib/api-client'
 import { getMemberId } from '../lib/member'
@@ -29,6 +29,11 @@ export default function GameClient({ groupCode }: { groupCode: string }) {
    const [phase, setPhase] = useState<Phase>(PHASE.INTRO)
    const [index, setIndex] = useState(0)
    const [transition, setTransition] = useState(false)
+   // Strikter Follow-Modus: Team-Stand liegt auf dem Server (activeStation/activePhase).
+   // `booted` springt beim ersten Poll auf den Team-Stand (Refresh-sicher),
+   // `lastNav` schützt eigene Navigation vor dem Zurückschnappen durch alten Poll.
+   const booted = useRef(false)
+   const lastNav = useRef(0)
 
    const fetcher = useCallback(
       () => fetchJson<GroupResponse>(`/api/groups/${groupCode}`, { cache: 'no-store' }),
@@ -47,6 +52,37 @@ export default function GameClient({ groupCode }: { groupCode: string }) {
    const total = PUBLIC_STATIONS.length
    const solvedCount = useMemo(() => Object.keys(solved).length, [solved])
    const progressPct = Math.round((solvedCount / total) * 100)
+   const serverStation = groupState?.activeStation ?? 1
+   const serverPhase = groupState?.activePhase ?? 'play'
+
+   // Refresh landet auf dem Team-Stand: Wer schon spielt, überspringt Intro/QR.
+   // Polling ist ein valides Abo auf ein externes System (Server-State) —
+   // setState hier übernimmt Server-Wahrheit, kein abgeleiteter Render-State.
+   useEffect(() => {
+      if (booted.current || !groupState) return
+      booted.current = true
+      const hasProgress = solvedCount > 0 || serverStation > 1 || serverPhase === 'finale'
+      if (!hasProgress) return
+      // eslint-disable-next-line react-hooks/set-state-in-effect -- Server-Stand beim Boot übernehmen
+      setIndex(Math.min(Math.max(serverStation - 1, 0), total - 1))
+      setPhase(serverPhase === 'finale' ? PHASE.FINALE : PHASE.PLAY)
+   }, [groupState, solvedCount, serverStation, serverPhase, total])
+
+   // Fremd-Solve / Fremd-Navigation übernehmen — alle Geräte gleiche Aufgabe.
+   useEffect(() => {
+      if (!booted.current || !groupState) return
+      if (Date.now() - lastNav.current < 2000) return
+      if (phase !== PHASE.PLAY && phase !== PHASE.FINALE) return
+      const wantIndex = Math.min(Math.max(serverStation - 1, 0), total - 1)
+      const wantPhase = serverPhase === 'finale' ? PHASE.FINALE : PHASE.PLAY
+      if (wantPhase !== phase) {
+         // eslint-disable-next-line react-hooks/set-state-in-effect -- Fremd-Navigation (Poll) übernehmen
+         setPhase(wantPhase)
+         if (wantPhase === PHASE.PLAY) setIndex(wantIndex)
+      } else if (wantPhase === PHASE.PLAY && wantIndex !== index) {
+         setIndex(wantIndex)
+      }
+   }, [groupState, serverStation, serverPhase, phase, index, total])
 
    // Gerät als Mitglied registrieren — sonst bleibt der Zähler bei 0/3.
    useEffect(() => {
@@ -86,9 +122,19 @@ export default function GameClient({ groupCode }: { groupCode: string }) {
       goTo(PHASE.QR)
    }
 
+   /** Team-Navigation an den Server melden (strikter Follow-Modus). */
+   function navigate(station: number, nextPhase: 'play' | 'finale') {
+      lastNav.current = Date.now()
+      void writeGroup({ action: 'navigate', station, phase: nextPhase }).catch(() => {
+         // Poll übernimmt — Navigation gilt lokal trotzdem
+      })
+   }
+
    function enterGame() {
+      const at = Math.min(Math.max(serverStation - 1, 0), total - 1)
       goTo(PHASE.PLAY)
-      setIndex(0)
+      setIndex(at)
+      navigate(at + 1, 'play')
    }
 
    async function onSolved(n: number, value: string): Promise<boolean> {
@@ -125,37 +171,40 @@ export default function GameClient({ groupCode }: { groupCode: string }) {
    function nextStation() {
       if (index + 1 >= total) {
          goTo(PHASE.FINALE)
+         navigate(serverStation, 'finale')
       } else {
+         const next = index + 1
          setTransition(true)
          window.setTimeout(() => {
-            setIndex((current) => current + 1)
+            setIndex(next)
             setTransition(false)
          }, 380)
+         navigate(next + 1, 'play')
       }
    }
 
    function prevStation() {
-      setIndex((current) => Math.max(0, current - 1))
+      const prev = Math.max(0, index - 1)
+      setIndex(prev)
+      navigate(prev + 1, 'play')
    }
 
-   async function doReset(next: Phase) {
-      await writeGroup({ action: 'reset' })
+   function backToStations() {
+      goTo(PHASE.PLAY)
       setIndex(0)
-      setPhase(next)
-   }
-
-   function resetGame() {
-      void doReset(PHASE.INTRO)
-   }
-
-   function restart() {
-      void doReset(PHASE.PLAY)
+      navigate(1, 'play')
    }
 
    function openStation(n: number) {
       if (!groupState?.unlocked?.[n]) return
       setIndex(n - 1)
       setPhase(PHASE.PLAY)
+      navigate(n, 'play')
+   }
+
+   function gotoFinale() {
+      goTo(PHASE.FINALE)
+      navigate(serverStation, 'finale')
    }
 
    let content
@@ -178,11 +227,11 @@ export default function GameClient({ groupCode }: { groupCode: string }) {
          </div>
       )
    } else if (phase === PHASE.INTRO) {
-      content = <StartScreen onStart={startGame} onReset={resetGame} solvedCount={solvedCount} groupCode={groupCode} />
+      content = <StartScreen onStart={startGame} solvedCount={solvedCount} groupCode={groupCode} />
    } else if (phase === PHASE.QR) {
       content = <QRScreen onEnter={enterGame} groupCode={groupCode} groupInfo={groupInfo} />
    } else if (phase === PHASE.FINALE) {
-      content = <Finale solved={solved} groupState={groupState} onRestart={restart} onPhoto={registerTeamPhoto} />
+      content = <Finale solved={solved} groupState={groupState} onRestart={backToStations} onPhoto={registerTeamPhoto} />
    } else {
       const station = PUBLIC_STATIONS[index]
       const isUnlocked = groupState?.unlocked?.[station.n] ?? station.n === 1
@@ -236,12 +285,12 @@ export default function GameClient({ groupCode }: { groupCode: string }) {
                      pct={progressPct}
                      phase={phase}
                      onOpen={openStation}
-                     onGotoFinale={() => goTo(PHASE.FINALE)}
+                     onGotoFinale={gotoFinale}
                   />
                   <main key={phase + index} className={`content ${transition ? '' : 'fade-in'}`}>
                      {content}
                   </main>
-                  <Footer solved={solved} onReset={resetGame} groupCode={groupCode} groupInfo={groupInfo} />
+                  <Footer solved={solved} groupCode={groupCode} groupInfo={groupInfo} />
                </div>
             ) : (
                <div className="wrap full">{content}</div>
