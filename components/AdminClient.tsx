@@ -2,12 +2,33 @@
 
 import Link from 'next/link'
 import { useCallback, useState } from 'react'
+import {
+   Check,
+   Flag,
+   KeyRound,
+   Lock,
+   LockOpen,
+   Minus,
+   MonitorPlay,
+   Pause,
+   Play,
+   Plus,
+   RotateCcw,
+   Timer,
+   Users,
+   X,
+} from 'lucide-react'
 import { STATIONS } from '../lib/game-data/stations'
 import { fetchJson, postJson } from '../lib/api-client'
 import { hintLevelsFor } from '../lib/hints'
 import { remainingLabel, timerStatus } from '../lib/time'
 import { usePolling } from '../lib/use-polling'
 import type { GameMode, GroupPayload } from '../lib/types'
+import { Badge } from './ui/badge'
+import { Button } from './ui/button'
+import { Card, CardAction, CardContent, CardDescription, CardFooter, CardHeader, CardTitle } from './ui/card'
+import { Input } from './ui/input'
+import { Label } from './ui/label'
 
 const TIMER_PRESETS = [45, 60, 90]
 const ADMIN_TOKEN_KEY = 'escape-admin-token'
@@ -89,8 +110,12 @@ export default function AdminClient({ groupCode }: { groupCode: string }) {
                      <span className="dot" /> SPIELLEITUNG · {groupCode}
                      {group.name ? ` · ${group.name}` : ''}
                   </div>
-                  <div>{remainingLabel(group.settings)}</div>
-                  <div>
+                  <div className="flex items-center gap-1.5">
+                     <Timer className="size-4" />
+                     {remainingLabel(group.settings)}
+                  </div>
+                  <div className="flex items-center gap-1.5">
+                     <Users className="size-4" />
                      {solvedCount}/{STATIONS.length} GELÖST
                   </div>
                </header>
@@ -98,133 +123,176 @@ export default function AdminClient({ groupCode }: { groupCode: string }) {
                {offline && (
                   <div className="offline-banner">
                      OFFLINE — Server antwortet nicht (letzte Daten werden gezeigt).
-                     <button type="button" className="btn small" onClick={() => void reload()}>
+                     <Button type="button" size="sm" variant="outline" onClick={() => void reload()}>
                         Erneut verbinden
-                     </button>
+                     </Button>
                   </div>
                )}
-               {error && !offline && <p className="feedback err">{error}</p>}
-               {actionError && <p className="feedback err">{actionError}</p>}
+               {error && !offline && (
+                  <p role="alert" className="rounded-md border border-destructive/50 bg-destructive/10 px-3 py-2 text-sm text-destructive">
+                     {error}
+                  </p>
+               )}
+               {actionError && (
+                  <p role="alert" className="rounded-md border border-destructive/50 bg-destructive/10 px-3 py-2 text-sm text-destructive">
+                     {actionError}
+                  </p>
+               )}
 
-               <section className="panel" data-tag="Steuerung">
-                  <div className="admin-grid">
-                     <label className="field">
-                        Spielleitungs-Passwort
-                        <span className="field-row">
-                           <input
-                              type="password"
-                              value={adminToken}
-                              onChange={(e) => saveToken(e.target.value)}
-                              placeholder="—"
-                              autoComplete="current-password"
-                           />
-                           {adminToken && (
-                              <button type="button" className="btn small ghost" onClick={() => saveToken('')}>
-                                 Löschen
-                              </button>
-                           )}
-                        </span>
-                     </label>
-                     <label className="field">
-                        Gruppenname
-                        <span className="field-row">
-                           <input value={name} onChange={(e) => setName(e.target.value)} maxLength={60} placeholder="—" />
-                           <button type="button" className="btn small" onClick={() => void send({ action: 'rename', name })}>
-                              OK
-                           </button>
-                        </span>
-                     </label>
-                     <label className="field">
-                        Modus
-                        <select
-                           value={group.settings.mode}
-                           onChange={(event) => void send({ action: 'settings', mode: event.target.value as GameMode })}
-                        >
-                           <option value="linear">Linear (der Reihe nach)</option>
-                           <option value="open">Alle Stationen offen</option>
-                           <option value="manual">Nur per Freigabe (QR/Code)</option>
-                        </select>
-                     </label>
-                     <div className="field">
-                        Timer-Presets
-                        <div className="btn-row">
-                           {TIMER_PRESETS.map((m) => (
-                              <button
-                                 type="button"
-                                 key={m}
-                                 className={`btn small ${Number(group.settings.timerMinutes) === m ? '' : 'ghost'}`}
-                                 onClick={() => void send({ action: 'settings', timerMinutes: m })}
-                              >
-                                 {m} Min
-                              </button>
-                           ))}
+               <Card>
+                  <CardHeader>
+                     <CardTitle>Steuerung</CardTitle>
+                     <CardDescription>
+                        Status: {timerStatus(group.settings)} · Versuche: {totalAttempts} · Fehler: {totalErrors}
+                     </CardDescription>
+                     <CardAction className="flex gap-2">
+                        <Button type="button" size="sm" variant="link" asChild>
+                           <Link href={`/projector/${groupCode}`}>
+                              <MonitorPlay />
+                              Beamer
+                           </Link>
+                        </Button>
+                        <Button type="button" size="sm" variant="link" asChild>
+                           <Link href={`/play/${groupCode}`}>
+                              <Users />
+                              Teamgerät
+                           </Link>
+                        </Button>
+                     </CardAction>
+                  </CardHeader>
+                  <CardContent>
+                     <div className="admin-grid">
+                        <div className="grid gap-1.5">
+                           <Label htmlFor="admin-token">
+                              <KeyRound className="size-3.5" />
+                              Spielleitungs-Passwort
+                           </Label>
+                           <div className="flex gap-2">
+                              <Input
+                                 id="admin-token"
+                                 type="password"
+                                 value={adminToken}
+                                 onChange={(e) => saveToken(e.target.value)}
+                                 placeholder="—"
+                                 autoComplete="current-password"
+                              />
+                              {adminToken && (
+                                 <Button type="button" size="icon" variant="ghost" onClick={() => saveToken('')} aria-label="Passwort löschen">
+                                    <X />
+                                 </Button>
+                              )}
+                           </div>
+                        </div>
+                        <div className="grid gap-1.5">
+                           <Label htmlFor="admin-name">Gruppenname</Label>
+                           <div className="flex gap-2">
+                              <Input
+                                 id="admin-name"
+                                 value={name}
+                                 onChange={(e) => setName(e.target.value)}
+                                 maxLength={60}
+                                 placeholder="—"
+                              />
+                              <Button type="button" size="sm" onClick={() => void send({ action: 'rename', name })}>
+                                 OK
+                              </Button>
+                           </div>
+                        </div>
+                        <div className="grid gap-1.5">
+                           <Label htmlFor="admin-mode">Modus</Label>
+                           <select
+                              id="admin-mode"
+                              className="border-input flex h-9 w-full rounded-md border bg-transparent px-3 py-1 text-sm shadow-xs outline-none focus-visible:border-ring focus-visible:ring-ring/50 focus-visible:ring-[3px] [&>option]:bg-popover"
+                              value={group.settings.mode}
+                              onChange={(event) => void send({ action: 'settings', mode: event.target.value as GameMode })}
+                           >
+                              <option value="linear">Linear (Reihenfolge)</option>
+                              <option value="open">Alle Stationen offen</option>
+                              <option value="manual">Nur per Freigabe</option>
+                           </select>
+                        </div>
+                        <div className="grid gap-1.5">
+                           <Label>Timer-Presets</Label>
+                           <div className="flex flex-wrap gap-2">
+                              {TIMER_PRESETS.map((m) => (
+                                 <Button
+                                    type="button"
+                                    key={m}
+                                    size="sm"
+                                    variant={Number(group.settings.timerMinutes) === m ? 'default' : 'outline'}
+                                    onClick={() => void send({ action: 'settings', timerMinutes: m })}
+                                 >
+                                    {m} Min
+                                 </Button>
+                              ))}
+                           </div>
+                        </div>
+                        <div className="grid gap-1.5">
+                           <Label htmlFor="admin-minutes">Minuten (5–240)</Label>
+                           <div className="flex gap-2">
+                              <Input
+                                 id="admin-minutes"
+                                 type="number"
+                                 min="5"
+                                 max="240"
+                                 value={timerMinutes}
+                                 onChange={(event) => setTimerMinutes(event.target.value === '' ? '' : Number(event.target.value))}
+                              />
+                              <Button type="button" size="sm" onClick={() => void send({ action: 'settings', timerMinutes })}>
+                                 Setzen
+                              </Button>
+                           </div>
                         </div>
                      </div>
-                     <label className="field">
-                        Minuten (5–240)
-                        <span className="field-row">
-                           <input
-                              type="number"
-                              min="5"
-                              max="240"
-                              value={timerMinutes}
-                              onChange={(event) => setTimerMinutes(event.target.value === '' ? '' : Number(event.target.value))}
-                           />
-                           <button type="button" className="btn small" onClick={() => void send({ action: 'settings', timerMinutes })}>
-                              Setzen
-                           </button>
-                        </span>
-                     </label>
-                  </div>
-                  <div className="btn-row">
-                     <button type="button" className="btn small" onClick={() => void send({ action: 'timer', command: 'start' })}>
+                  </CardContent>
+                  <CardFooter className="flex flex-wrap gap-2">
+                     <Button type="button" size="sm" onClick={() => void send({ action: 'timer', command: 'start' })}>
+                        <Play />
                         Start
-                     </button>
-                     <button type="button" className="btn small ghost" onClick={() => void send({ action: 'timer', command: 'pause' })}>
+                     </Button>
+                     <Button type="button" size="sm" variant="outline" onClick={() => void send({ action: 'timer', command: 'pause' })}>
+                        <Pause />
                         Pause
-                     </button>
-                     <button type="button" className="btn small ghost" onClick={() => void send({ action: 'timer', command: 'resume' })}>
+                     </Button>
+                     <Button type="button" size="sm" variant="outline" onClick={() => void send({ action: 'timer', command: 'resume' })}>
                         Weiter
-                     </button>
-                     <button
+                     </Button>
+                     <Button
                         type="button"
-                        className="btn small ghost"
+                        size="sm"
+                        variant="outline"
                         onClick={() => void send({ action: 'timer', command: 'adjust', minutes: 5 })}
                      >
-                        +5 Bonus
-                     </button>
-                     <button
+                        <Plus />
+                        5 Bonus
+                     </Button>
+                     <Button
                         type="button"
-                        className="btn small ghost"
+                        size="sm"
+                        variant="outline"
                         onClick={() => void send({ action: 'timer', command: 'adjust', minutes: -5 })}
                      >
-                        −5 Strafe
-                     </button>
-                     <button
+                        <Minus />
+                        5 Strafe
+                     </Button>
+                     <Button
                         type="button"
-                        className="btn small ghost"
+                        size="sm"
+                        variant="outline"
                         onClick={() => void send({ action: 'reveal-finale', reveal: !group.settings.revealFinale })}
                      >
+                        <Flag />
                         {group.settings.revealFinale ? 'Finale schließen' : 'Finale öffnen'}
-                     </button>
-                     <button type="button" className="btn small ghost" onClick={() => void send({ action: 'timer', command: 'finish' })}>
+                     </Button>
+                     <Button type="button" size="sm" variant="secondary" onClick={() => void send({ action: 'timer', command: 'finish' })}>
                         Beenden
-                     </button>
-                     <button type="button" className="btn small ghost" onClick={() => void send({ action: 'reset' })}>
+                     </Button>
+                     <Button type="button" size="sm" variant="destructive" onClick={() => void send({ action: 'reset' })}>
+                        <RotateCcw />
                         Reset
-                     </button>
-                  </div>
-                  <p className="hint">
-                     Status: {timerStatus(group.settings)} · Versuche: {totalAttempts} · Fehler: {totalErrors} ·{' '}
-                     <Link className="footer-link" href={`/projector/${groupCode}`}>
-                        Beamer
-                     </Link>{' '}
-                     ·{' '}
-                     <Link className="footer-link" href={`/play/${groupCode}`}>
-                        Teamgerät
-                     </Link>
-                  </p>
-               </section>
+                     </Button>
+                  </CardFooter>
+               </Card>
 
                <section className="admin-stations">
                   {STATIONS.map((station) => {
@@ -234,33 +302,56 @@ export default function AdminClient({ groupCode }: { groupCode: string }) {
                      const hintCount = group.hints?.[station.n] ?? 0
                      const maxHints = hintLevelsFor(station).length
                      return (
-                        <article className={`station-card ${solved ? 'done' : ''}`} key={station.n}>
-                           <div>
+                        <Card key={station.n} className={solved ? 'border-primary/60' : ''}>
+                           <CardHeader>
                               <div className="eyebrow">Station {String(station.n).padStart(2, '0')}</div>
-                              <h2>{station.title}</h2>
+                              <CardTitle>{station.title}</CardTitle>
+                              <CardAction>
+                                 {solved ? (
+                                    <Badge>
+                                       <Check />
+                                       {group.solved[station.n]}
+                                    </Badge>
+                                 ) : unlocked ? (
+                                    <Badge variant="secondary">offen</Badge>
+                                 ) : (
+                                    <Badge variant="outline">
+                                       <Lock className="size-3" />
+                                       gesperrt
+                                    </Badge>
+                                 )}
+                              </CardAction>
+                           </CardHeader>
+                           <CardContent className="text-sm text-muted-foreground">
                               <p>
-                                 {solved ? `gelöst: ${group.solved[station.n]}` : unlocked ? 'offen' : 'gesperrt'} · Hinweise:{' '}
-                                 {hintCount}/{maxHints} · Versuche: {group.attempts?.[station.n] ?? 0} · Fehler:{' '}
+                                 Hinweise: {hintCount}/{maxHints} · Versuche: {group.attempts?.[station.n] ?? 0} · Fehler:{' '}
                                  {group.errors?.[station.n] ?? 0}
                               </p>
-                              {upload && <p>Upload: {upload.name} · {upload.approved ? 'bestätigt (Station gelöst)' : 'offen'}</p>}
+                              {upload && (
+                                 <p>
+                                    Upload: {upload.name} · {upload.approved ? 'bestätigt (Station gelöst)' : 'wartet auf Bestätigung'}
+                                 </p>
+                              )}
                               {upload?.dataUrl && (
                                  // eslint-disable-next-line @next/next/no-img-element -- data:-URL aus Upload, nichts zu optimieren
                                  <img className="preview small" src={upload.dataUrl} alt={`Upload Station ${station.n}`} />
                               )}
-                           </div>
-                           <div className="card-actions">
-                              <button
+                           </CardContent>
+                           <CardFooter className="flex flex-wrap gap-2">
+                              <Button
                                  type="button"
-                                 className="btn small ghost"
+                                 size="sm"
+                                 variant="outline"
                                  onClick={() => void send({ action: unlocked ? 'lock' : 'unlock', station: station.n })}
                               >
+                                 {unlocked ? <Lock /> : <LockOpen />}
                                  {unlocked ? 'Sperren' : 'Freigeben'}
-                              </button>
+                              </Button>
                               {upload && (
-                                 <button
+                                 <Button
                                     type="button"
-                                    className="btn small"
+                                    size="sm"
+                                    variant={upload.approved ? 'secondary' : 'default'}
                                     onClick={() =>
                                        void send({
                                           action: 'approve-upload',
@@ -269,11 +360,12 @@ export default function AdminClient({ groupCode }: { groupCode: string }) {
                                        })
                                     }
                                  >
+                                    {upload.approved ? <X /> : <Check />}
                                     {upload.approved ? 'Zurücknehmen' : 'Bestätigen'}
-                                 </button>
+                                 </Button>
                               )}
-                           </div>
-                        </article>
+                           </CardFooter>
+                        </Card>
                      )
                   })}
                </section>

@@ -1,5 +1,6 @@
 import { loadStore, saveStore } from './store-backend'
 import { ADMIN_ACTIONS, requireAdminToken } from './admin-auth'
+import { checkSolveRateLimit } from './rate-limit'
 import { FINAL_PASSWORD, SOLUTIONS, STATIONS } from './game-data/stations'
 import { hintLevelsFor, normalizeInput } from './hints'
 import {
@@ -205,27 +206,8 @@ function checkFinished(group: GroupRecord): void {
    }
 }
 
-// Brute-Force-Bremse: max. 12 Solve-Versuche pro 60 s je Gruppe+Station.
-// In-Memory (Single-Server für die Veranstaltung) — kein Persist nötig.
-const SOLVE_RATE_WINDOW_MS = 60_000
-const SOLVE_RATE_MAX = 12
-const solveAttemptTimes = new Map<string, number[]>()
-
-function checkSolveRateLimit(code: string, station: number): void {
-   const key = `${code}:${station}`
-   const cutoff = Date.now() - SOLVE_RATE_WINDOW_MS
-   const times = (solveAttemptTimes.get(key) ?? []).filter((t) => t > cutoff)
-   if (times.length >= SOLVE_RATE_MAX) {
-      throw httpError(429, 'Zu viele Versuche — kurz warten, dann erneut eingeben')
-   }
-   times.push(Date.now())
-   solveAttemptTimes.set(key, times)
-}
-
-/** Nur für Tests — leert die Rate-Limit-Fenster. */
-export function __resetSolveRateLimits(): void {
-   solveAttemptTimes.clear()
-}
+// Brute-Force-Bremse lebt in lib/rate-limit.ts (Redis mit Memory-Fallback).
+export { __resetSolveRateLimits } from './rate-limit'
 
 /** Team folgt gemeinsam: nach Solve auf die nächste offene, ungelöste Station. */
 function advanceActive(group: GroupRecord): void {
@@ -392,7 +374,7 @@ export async function solveStation(
 
       // Gesperrte Stationen lassen sich auch per Direkt-POST nicht lösen.
       if (!group.unlocked[station.n]) throw httpError(403, 'Station ist gesperrt')
-      checkSolveRateLimit(code, station.n)
+      await checkSolveRateLimit(code, station.n)
 
       group.attempts[station.n] = Number(group.attempts[station.n] ?? 0) + 1
       if (Number(value) !== station.solution) {
