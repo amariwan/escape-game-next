@@ -4,8 +4,8 @@ import { useRouter } from 'next/navigation'
 import Link from 'next/link'
 import { useEffect, useState } from 'react'
 import QRCode from 'qrcode'
-import { postJson } from '../lib/api-client'
-import type { GroupPayload } from '../lib/types'
+import { fetchJson, postJson } from '../lib/api-client'
+import type { EventSettings, GroupPayload } from '../lib/types'
 
 export default function GroupGate() {
    const router = useRouter()
@@ -15,6 +15,13 @@ export default function GroupGate() {
    const [error, setError] = useState('')
    const [created, setCreated] = useState<GroupPayload | null>(null)
    const [qr, setQr] = useState('')
+   const [event, setEvent] = useState<EventSettings | null>(null)
+
+   useEffect(() => {
+      fetchJson<EventSettings>('/api/event', { cache: 'no-store' })
+         .then(setEvent)
+         .catch(() => setEvent(null))
+   }, [])
 
    useEffect(() => {
       if (!created) return
@@ -112,8 +119,18 @@ export default function GroupGate() {
                      <br />
                      <span className="accent">oder Code beitreten</span>
                   </h1>
-                  <p className="prompt center">Erstellt eine Gruppen-Sitzung. Alle Geräte mit demselben Code sehen denselben Fortschritt.</p>
-                  <form className="terminal-line group-form" onSubmit={(e) => void createGroup(e)}>
+                   <p className="prompt center">Erstellt eine Gruppen-Sitzung. Alle Geräte mit demselben Code sehen denselben Fortschritt.</p>
+                   {event?.mode === 'solo' && event.soloCode ? (
+                      <div className="terminal-line group-form">
+                         <span className="caret">&gt;</span>
+                         <span>SOLO-EVENT AKTIV — alle Geräte spielen gemeinsam in Gruppe {event.soloCode}.</span>
+                         <Link className="btn primary" href={`/play/${event.soloCode}`}>
+                            Solo-Gruppe starten
+                         </Link>
+                      </div>
+                   ) : (
+                   <>
+                   <form className="terminal-line group-form" onSubmit={(e) => void createGroup(e)}>
                      <span className="caret">&gt;</span>
                      <input
                         value={name}
@@ -126,21 +143,26 @@ export default function GroupGate() {
                         {busy ? '…' : 'Neue Gruppe erstellen'}
                      </button>
                   </form>
-                  <form className="terminal-line group-form" onSubmit={joinGroup}>
-                     <span className="caret">&gt;</span>
-                     <input value={code} onChange={(event) => setCode(event.target.value)} placeholder="GRUPPEN-CODE" aria-label="Gruppen-Code" />
-                     <button className="btn small" type="submit">
-                        Beitreten
-                     </button>
-                  </form>
-                  <div className="btn-row center">
-                     <Link className="link" href="/scoreboard">
-                        Scoreboard aller Gruppen →
-                     </Link>
-                     <Link className="link" href="/print">
-                        Druck-Paket →
-                     </Link>
-                  </div>
+                   <form className="terminal-line group-form" onSubmit={joinGroup}>
+                      <span className="caret">&gt;</span>
+                      <input value={code} onChange={(event) => setCode(event.target.value)} placeholder="GRUPPEN-CODE" aria-label="Gruppen-Code" />
+                      <button className="btn small" type="submit">
+                         Beitreten
+                      </button>
+                   </form>
+                   </>
+                   )}
+                   <div className="btn-row center">
+                      <Link className="link" href="/beamer">
+                         Beamer-Wand →
+                      </Link>
+                      <Link className="link" href="/scoreboard">
+                         Scoreboard aller Gruppen →
+                      </Link>
+                      <Link className="link" href="/print">
+                         Druck-Paket →
+                      </Link>
+                   </div>
                   {error && <p className="feedback err">{error}</p>}
                </div>
             </div>

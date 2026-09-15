@@ -23,6 +23,8 @@ interface StationViewProps {
    index: number
    total: number
    openStation: (n: number) => void
+   /** Split-Modus: nur die eigene Aufgabe zählt — Grid und Blättern ausblenden. */
+   split?: boolean
 }
 
 export default function StationView({
@@ -40,6 +42,7 @@ export default function StationView({
    index,
    total,
    openStation,
+   split = false,
 }: StationViewProps) {
    const [value, setValue] = useState(solvedValue ?? '')
    const [status, setStatus] = useState<Status>(solvedValue !== undefined ? 'ok' : 'idle')
@@ -144,7 +147,11 @@ export default function StationView({
          <div className="station-head">
             <div>
                <div className="eyebrow">
-                  Station {String(station.n).padStart(2, '0')} / {String(total).padStart(2, '0')}
+                  {split ? (
+                     <>Deine Aufgabe · Station {String(station.n).padStart(2, '0')}</>
+                  ) : (
+                     <>Station {String(station.n).padStart(2, '0')} / {String(total).padStart(2, '0')}</>
+                  )}
                </div>
                <h1 className="title">{station.title}</h1>
             </div>
@@ -208,6 +215,7 @@ export default function StationView({
             <div className={`feedback ${status} ${anim}`}>{msg}</div>
          </div>
 
+         {!split && (
          <div className="nav-row">
             <button type="button" className="btn ghost" onClick={onPrev} disabled={!canPrev}>
                ← Zurück
@@ -232,6 +240,7 @@ export default function StationView({
                {index + 1 >= total ? 'Zur Prüfung →' : 'Nächste →'}
             </button>
          </div>
+         )}
       </div>
    )
 }

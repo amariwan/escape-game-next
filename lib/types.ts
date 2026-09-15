@@ -1,6 +1,6 @@
 // Gemeinsame Typen für Store, API und Clients.
 
-export type GameMode = 'linear' | 'open' | 'manual'
+export type GameMode = 'linear' | 'open' | 'manual' | 'split'
 
 /** Wo das Team gemeinsam steht — strikter Follow-Modus, serverseitig. */
 export type ActivePhase = 'play' | 'finale'
@@ -109,11 +109,18 @@ export interface TeamPhoto {
    uploadedAt: string
 }
 
+/** Split-Modus: genau eine Station pro Gerät (Aufgabenverteilung). */
+export interface SplitState {
+   /** memberId → Stationsnummer der eigenen Aufgabe. */
+   assignments: Record<string, number>
+}
+
 export interface GroupRecord {
    code: string
    name: string
    solved: Record<number, string>
    unlocked: Record<number, boolean>
+   split: SplitState
    hints: Record<number, number>
    attempts: Record<number, number>
    errors: Record<number, number>
@@ -133,8 +140,20 @@ export interface GroupRecord {
 /** Was tatsächlich auf Platte liegt — darf lückenhaft sein. */
 export type StoredGroup = Partial<GroupRecord>
 
+/** Event-Modus: solo = ein Event, eine Gruppe (alle Geräte gemeinsam);
+ *  multi = beliebig viele Gruppen parallel. */
+export type EventMode = 'solo' | 'multi'
+
+export interface EventSettings {
+   mode: EventMode
+   /** Gruppen-Code der Solo-Gruppe (nur im Solo-Modus relevant). */
+   soloCode: string | null
+   updatedAt: string
+}
+
 export interface StoreShape {
    groups: Record<string, StoredGroup>
+   event?: Partial<EventSettings>
 }
 
 export interface GroupPayload extends GroupRecord {

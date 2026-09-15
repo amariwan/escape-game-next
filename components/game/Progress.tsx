@@ -7,9 +7,11 @@ interface ProgressProps {
    phase: string
    onOpen: (n: number) => void
    onGotoFinale: () => void
+   /** Split: kein manueller Finale-Link — Finale öffnet sich automatisch. */
+   allowFinaleLink?: boolean
 }
 
-export default function Progress({ solved, total, pct, phase, onOpen, onGotoFinale }: ProgressProps) {
+export default function Progress({ solved, total, pct, phase, onOpen, onGotoFinale, allowFinaleLink = true }: ProgressProps) {
    if (phase === 'qr') return null
    return (
       <div className="progress">
@@ -20,7 +22,7 @@ export default function Progress({ solved, total, pct, phase, onOpen, onGotoFina
          <span>
             {solved}/{total}
          </span>
-         {phase === 'play' ? (
+         {phase === 'play' && allowFinaleLink ? (
             <button type="button" className="link small" onClick={onGotoFinale}>
                → Prüfung
             </button>

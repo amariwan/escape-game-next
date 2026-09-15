@@ -1453,3 +1453,75 @@ table.report td.mark {
       display: none;
    }
 }
+
+/* ---------- Beamer-Wand (alle Gruppen) ---------- */
+.beamer-wall {
+   display: flex;
+   flex-direction: column;
+   gap: 28px;
+}
+.beamer-card {
+   border: 1px solid var(--grid);
+   border-radius: 10px;
+   padding: clamp(14px, 2.5vw, 28px);
+   background: var(--panel);
+   display: flex;
+   flex-direction: column;
+   gap: 16px;
+}
+.beamer-card.solo {
+   border-color: var(--ink);
+   box-shadow: var(--glow);
+}
+.beamer-card-head {
+   display: grid;
+   grid-template-columns: 1fr auto 1fr;
+   align-items: center;
+   gap: 16px;
+   color: var(--ink-soft);
+   letter-spacing: 0.18em;
+   text-transform: uppercase;
+}
+.beamer-card-head > :last-child {
+   text-align: right;
+}
+.beamer-card-time {
+   font-size: clamp(28px, 5vw, 56px);
+   color: #eafff3;
+   text-shadow: var(--glow);
+   letter-spacing: 0;
+}
+.beamer-solo-badge {
+   display: inline-block;
+   margin-left: 10px;
+   padding: 2px 10px;
+   border: 1px solid var(--ink);
+   border-radius: 999px;
+   font-size: 11px;
+   letter-spacing: 0.2em;
+   color: var(--ink);
+   box-shadow: var(--glow);
+}
+.beamer-card-word {
+   text-align: center;
+   font-size: clamp(20px, 4vw, 48px);
+   letter-spacing: 0.16em;
+   color: #eafff3;
+   text-shadow: var(--glow);
+   word-break: break-word;
+}
+.beamer-card-links {
+   display: flex;
+   gap: 8px;
+   flex-wrap: wrap;
+   justify-content: center;
+}
+@media (max-width: 760px) {
+   .beamer-card-head {
+      grid-template-columns: 1fr;
+      text-align: center;
+   }
+   .beamer-card-head > :last-child {
+      text-align: center;
+   }
+}

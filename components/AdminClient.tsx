@@ -209,6 +209,7 @@ export default function AdminClient({ groupCode }: { groupCode: string }) {
                               <option value="linear">Linear (Reihenfolge)</option>
                               <option value="open">Alle Stationen offen</option>
                               <option value="manual">Nur per Freigabe</option>
+                              <option value="split">Split — jede:r löst eigene Station</option>
                            </select>
                         </div>
                         <div className="grid gap-1.5">
@@ -294,13 +295,21 @@ export default function AdminClient({ groupCode }: { groupCode: string }) {
                   </CardFooter>
                </Card>
 
-               <section className="admin-stations">
-                  {STATIONS.map((station) => {
-                     const solved = group.solved?.[station.n] !== undefined
-                     const unlocked = group.unlocked?.[station.n]
-                     const upload = group.uploads?.[station.n]
-                     const hintCount = group.hints?.[station.n] ?? 0
-                     const maxHints = hintLevelsFor(station).length
+                {group.settings.mode === 'split' && (
+                   <p className="hint">
+                      Split aktiv: {Object.keys(group.split?.assignments ?? {}).length} Aufgabe(n) verteilt ·{' '}
+                      {Object.values(group.split?.assignments ?? {}).filter((n) => group.solved?.[n] !== undefined).length}{' '}
+                      gelöst — Finale öffnet sich automatisch bei allen.
+                   </p>
+                )}
+                <section className="admin-stations">
+                   {STATIONS.map((station) => {
+                      const solved = group.solved?.[station.n] !== undefined
+                      const unlocked = group.unlocked?.[station.n]
+                      const upload = group.uploads?.[station.n]
+                      const hintCount = group.hints?.[station.n] ?? 0
+                      const maxHints = hintLevelsFor(station).length
+                      const assignee = Object.entries(group.split?.assignments ?? {}).find(([, n]) => n === station.n)?.[0]
                      return (
                         <Card key={station.n} className={solved ? 'border-primary/60' : ''}>
                            <CardHeader>
@@ -322,11 +331,12 @@ export default function AdminClient({ groupCode }: { groupCode: string }) {
                                  )}
                               </CardAction>
                            </CardHeader>
-                           <CardContent className="text-sm text-muted-foreground">
-                              <p>
-                                 Hinweise: {hintCount}/{maxHints} · Versuche: {group.attempts?.[station.n] ?? 0} · Fehler:{' '}
-                                 {group.errors?.[station.n] ?? 0}
-                              </p>
+                            <CardContent className="text-sm text-muted-foreground">
+                               <p>
+                                  Hinweise: {hintCount}/{maxHints} · Versuche: {group.attempts?.[station.n] ?? 0} · Fehler:{' '}
+                                  {group.errors?.[station.n] ?? 0}
+                               </p>
+                               {assignee && <p>Aufgabe von Gerät {assignee.slice(0, 8)}…</p>}
                               {upload && (
                                  <p>
                                     Upload: {upload.name} · {upload.approved ? 'bestätigt (Station gelöst)' : 'wartet auf Bestätigung'}

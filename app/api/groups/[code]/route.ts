@@ -52,7 +52,7 @@ export async function POST(request: NextRequest, { params }: { params: Promise<{
       }
 
       if (body.action === 'solve') {
-         const result = await solveStation(code, body.station, body.value)
+         const result = await solveStation(code, body.station, body.value, body.memberId)
          return Response.json({ ...result.group, valid: result.valid })
       }
 

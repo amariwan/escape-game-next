@@ -39,9 +39,20 @@ export default function GameClient({ groupCode }: { groupCode: string }) {
       () => fetchJson<GroupResponse>(`/api/groups/${groupCode}`, { cache: 'no-store' }),
       [groupCode],
    )
-   const { data: groupState, error, offline, loading, reload, ingest } = usePolling(fetcher, 2000)
+    const { data: groupState, error, offline, loading, reload, ingest } = usePolling(fetcher, 2000)
+    // Stabile Geräte-ID — im Split-Modus Schlüssel zur eigenen Aufgabe.
+    const [memberId] = useState(getMemberId)
 
-   const solved = useMemo(() => groupState?.solved ?? {}, [groupState])
+    const solved = useMemo(() => groupState?.solved ?? {}, [groupState])
+    // Split-Modus: jede:r sieht nur die eigene Aufgabe + Team-Fortschritt.
+    const isSplit = groupState?.settings?.mode === 'split'
+    const assignments = useMemo(() => groupState?.split?.assignments ?? {}, [groupState])
+    const myStation = isSplit ? assignments[memberId] : undefined
+    const assignedStations = useMemo(() => Object.values(assignments), [assignments])
+    const teamSolvedCount = useMemo(
+       () => assignedStations.filter((n) => solved[n] !== undefined).length,
+       [assignedStations, solved],
+    )
    const groupInfo = useMemo(
       () => ({
          memberCount: groupState?.memberCount ?? groupState?.members?.length ?? 0,
@@ -50,8 +61,11 @@ export default function GameClient({ groupCode }: { groupCode: string }) {
       [groupState],
    )
    const total = PUBLIC_STATIONS.length
-   const solvedCount = useMemo(() => Object.keys(solved).length, [solved])
-   const progressPct = Math.round((solvedCount / total) * 100)
+   const rawSolvedCount = useMemo(() => Object.keys(solved).length, [solved])
+   // Split: Fortschritt = gelöste Aufgaben / verteilte Aufgaben (Team-Sicht).
+   const solvedCount = isSplit ? teamSolvedCount : rawSolvedCount
+   const progressTotal = isSplit ? Math.max(assignedStations.length, 1) : total
+   const progressPct = Math.round((solvedCount / progressTotal) * 100)
    const serverStation = groupState?.activeStation ?? 1
    const serverPhase = groupState?.activePhase ?? 'play'
 
@@ -64,25 +78,36 @@ export default function GameClient({ groupCode }: { groupCode: string }) {
       const hasProgress = solvedCount > 0 || serverStation > 1 || serverPhase === 'finale'
       if (!hasProgress) return
       // eslint-disable-next-line react-hooks/set-state-in-effect -- Server-Stand beim Boot übernehmen
-      setIndex(Math.min(Math.max(serverStation - 1, 0), total - 1))
+      if (isSplit && myStation) setIndex(myStation - 1)
+      else setIndex(Math.min(Math.max(serverStation - 1, 0), total - 1))
       setPhase(serverPhase === 'finale' ? PHASE.FINALE : PHASE.PLAY)
-   }, [groupState, solvedCount, serverStation, serverPhase, total])
+   }, [groupState, solvedCount, serverStation, serverPhase, total, isSplit, myStation])
 
    // Fremd-Solve / Fremd-Navigation übernehmen — alle Geräte gleiche Aufgabe.
+   // Split: keine fremde Navigation (jede:r hat eigene Aufgabe) —
+   // nur das automatisch geöffnete Finale übernehmen.
    useEffect(() => {
       if (!booted.current || !groupState) return
+      if (isSplit) {
+         if (serverPhase === 'finale' && phase !== PHASE.FINALE) {
+            // eslint-disable-next-line react-hooks/set-state-in-effect -- Split-Finale (Poll) übernehmen
+            setPhase(PHASE.FINALE)
+         } else if (phase === PHASE.PLAY && myStation && index !== myStation - 1) {
+            setIndex(myStation - 1)
+         }
+         return
+      }
       if (Date.now() - lastNav.current < 2000) return
       if (phase !== PHASE.PLAY && phase !== PHASE.FINALE) return
       const wantIndex = Math.min(Math.max(serverStation - 1, 0), total - 1)
       const wantPhase = serverPhase === 'finale' ? PHASE.FINALE : PHASE.PLAY
       if (wantPhase !== phase) {
-         // eslint-disable-next-line react-hooks/set-state-in-effect -- Fremd-Navigation (Poll) übernehmen
          setPhase(wantPhase)
          if (wantPhase === PHASE.PLAY) setIndex(wantIndex)
       } else if (wantPhase === PHASE.PLAY && wantIndex !== index) {
          setIndex(wantIndex)
       }
-   }, [groupState, serverStation, serverPhase, phase, index, total])
+   }, [groupState, serverStation, serverPhase, phase, index, total, isSplit, myStation])
 
    // Gerät als Mitglied registrieren — sonst bleibt der Zähler bei 0/3.
    useEffect(() => {
@@ -131,14 +156,15 @@ export default function GameClient({ groupCode }: { groupCode: string }) {
    }
 
    function enterGame() {
-      const at = Math.min(Math.max(serverStation - 1, 0), total - 1)
+      // Split: direkt auf die eigene Aufgabe — keine Team-Navigation melden.
+      const at = isSplit && myStation ? myStation - 1 : Math.min(Math.max(serverStation - 1, 0), total - 1)
       goTo(PHASE.PLAY)
       setIndex(at)
-      navigate(at + 1, 'play')
+      if (!isSplit) navigate(at + 1, 'play')
    }
 
    async function onSolved(n: number, value: string): Promise<boolean> {
-      const data = await writeGroup({ action: 'solve', station: n, value })
+      const data = await writeGroup({ action: 'solve', station: n, value, memberId })
       return data.valid ?? false
    }
 
@@ -169,6 +195,8 @@ export default function GameClient({ groupCode }: { groupCode: string }) {
    }
 
    function nextStation() {
+      // Split: eine Aufgabe pro Gerät — kein Blättern.
+      if (isSplit) return
       if (index + 1 >= total) {
          goTo(PHASE.FINALE)
          navigate(serverStation, 'finale')
@@ -184,6 +212,7 @@ export default function GameClient({ groupCode }: { groupCode: string }) {
    }
 
    function prevStation() {
+      if (isSplit) return
       const prev = Math.max(0, index - 1)
       setIndex(prev)
       navigate(prev + 1, 'play')
@@ -196,6 +225,8 @@ export default function GameClient({ groupCode }: { groupCode: string }) {
    }
 
    function openStation(n: number) {
+      // Split: nur die eigene Aufgabe ist zugänglich.
+      if (isSplit && n !== myStation) return
       if (!groupState?.unlocked?.[n]) return
       setIndex(n - 1)
       setPhase(PHASE.PLAY)
@@ -232,26 +263,49 @@ export default function GameClient({ groupCode }: { groupCode: string }) {
       content = <QRScreen onEnter={enterGame} groupCode={groupCode} groupInfo={groupInfo} />
    } else if (phase === PHASE.FINALE) {
       content = <Finale solved={solved} groupState={groupState} onRestart={backToStations} onPhoto={registerTeamPhoto} />
-   } else {
-      const station = PUBLIC_STATIONS[index]
-      const isUnlocked = groupState?.unlocked?.[station.n] ?? station.n === 1
+   } else if (isSplit && !myStation) {
       content = (
-         <StationView
-            station={station}
-            solvedMap={solved}
-            solvedValue={solved[station.n]}
-            groupState={groupState}
-            isUnlocked={isUnlocked}
-            onSolved={onSolved}
-            onHint={requestHint}
-            onUpload={registerUpload}
-            onNext={nextStation}
-            onPrev={prevStation}
-            canPrev={index > 0}
-            index={index}
-            total={total}
-            openStation={openStation}
-         />
+         <div className="start">
+            <div className="eyebrow">Split-Modus · Aufgabe wird zugeteilt</div>
+            <h1 className="title">Einen Moment</h1>
+            <p className="prompt center">Die Spielleitung verteilt gerade die Aufgaben — dieses Gerät bekommt gleich seine eigene Station.</p>
+            <button type="button" className="btn primary" onClick={() => void reload()}>
+               Erneut prüfen
+            </button>
+         </div>
+      )
+   } else {
+      const splitIndex = isSplit && myStation ? myStation - 1 : index
+      const station = PUBLIC_STATIONS[splitIndex]
+      const isUnlocked = groupState?.unlocked?.[station.n] ?? station.n === 1
+      const mineSolved = solved[station.n] !== undefined
+      content = (
+         <>
+            {isSplit && (
+               <p className="prompt center">
+                  {mineSolved
+                     ? `Deine Aufgabe (Station ${station.n}) ist geschafft ✓ — Team-Stand ${solvedCount}/${progressTotal}. Das Finale öffnet sich, sobald alle fertig sind.`
+                     : `Team-Stand ${solvedCount}/${progressTotal} Aufgaben geschafft — deine Station wartet.`}
+               </p>
+            )}
+            <StationView
+               station={station}
+               solvedMap={solved}
+               solvedValue={solved[station.n]}
+               groupState={groupState}
+               isUnlocked={isUnlocked}
+               onSolved={onSolved}
+               onHint={requestHint}
+               onUpload={registerUpload}
+               onNext={nextStation}
+               onPrev={prevStation}
+               canPrev={!isSplit && index > 0}
+               index={splitIndex}
+               total={total}
+               openStation={openStation}
+               split={isSplit}
+            />
+         </>
       )
    }
 
@@ -271,18 +325,19 @@ export default function GameClient({ groupCode }: { groupCode: string }) {
                         </button>
                      </div>
                   )}
-                  <TopBar
-                     phase={phase}
-                     solvedCount={solvedCount}
-                     total={total}
-                     groupCode={groupCode}
-                     groupInfo={groupInfo}
-                     groupState={groupState}
-                  />
-                  <Progress
-                     solved={solvedCount}
-                     total={total}
-                     pct={progressPct}
+                   <TopBar
+                      phase={phase}
+                      solvedCount={solvedCount}
+                      total={progressTotal}
+                      groupCode={groupCode}
+                      groupInfo={groupInfo}
+                      groupState={groupState}
+                   />
+                   <Progress
+                      solved={solvedCount}
+                      total={progressTotal}
+                      allowFinaleLink={!isSplit}
+                      pct={progressPct}
                      phase={phase}
                      onOpen={openStation}
                      onGotoFinale={gotoFinale}

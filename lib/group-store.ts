@@ -6,6 +6,8 @@ import { hintLevelsFor, normalizeInput } from './hints'
 import {
    httpError,
    type ActivePhase,
+   type EventMode,
+   type EventSettings,
    type GameMode,
    type GroupPayload,
    type GroupRecord,
@@ -103,6 +105,15 @@ function normalizeGroup(group: StoredGroup | undefined, code: string): GroupReco
       name: group?.name ?? '',
       solved: group?.solved ?? {},
       unlocked: group?.unlocked ?? defaultUnlocked(),
+      split: {
+         assignments: (group?.split?.assignments && typeof group.split.assignments === 'object'
+            ? Object.fromEntries(
+                 Object.entries(group.split.assignments)
+                    .map(([memberId, station]) => [cleanMemberId(memberId), Number(station)])
+                    .filter(([, station]) => STATIONS.some((item) => item.n === station)),
+              )
+            : {}) as Record<string, number>,
+      },
       hints: group?.hints ?? defaultHints(),
       attempts: group?.attempts ?? defaultCounters(),
       errors: group?.errors ?? defaultCounters(),
@@ -157,6 +168,7 @@ function createGroupRecord(code: string, memberId: string | null = null, poolCod
       name: cleanName(name),
       solved: {},
       unlocked: defaultUnlocked(),
+      split: { assignments: {} },
       hints: defaultHints(),
       attempts: defaultCounters(),
       errors: defaultCounters(),
@@ -184,8 +196,9 @@ function nextUnlocked(
       }, {})
    }
 
-   // manual: nur Spielleitung schaltet frei — Auto-Logik rührt nichts an.
-   if (mode === 'manual') {
+   // manual/split: nur Spielleitung (bzw. die Split-Zuteilung) schaltet
+   // frei — Auto-Logik rührt nichts an.
+   if (mode === 'manual' || mode === 'split') {
       return { 1: true, ...(current ?? {}) }
    }
 
@@ -209,6 +222,36 @@ function checkFinished(group: GroupRecord): void {
 // Brute-Force-Bremse lebt in lib/rate-limit.ts (Redis mit Memory-Fallback).
 export { __resetSolveRateLimits } from './rate-limit'
 
+/**
+ * Split-Modus: jedes Mitglied bekommt genau eine Station (Aufstieg nach
+ * Beitrittsreihenfolge, kleinste freie Stationsnummer zuerst).
+ * Wirft 409, wenn keine freie Aufgabe mehr übrig ist.
+ */
+function assignSplit(group: GroupRecord, memberId: string): number {
+   const id = cleanMemberId(memberId)
+   if (!id) throw httpError(400, 'Mitglieds-ID fehlt')
+   const existing = group.split.assignments[id]
+   if (existing !== undefined) return existing
+   const taken = new Set(Object.values(group.split.assignments))
+   const free = STATIONS.find((s) => !taken.has(s.n))
+   if (!free) throw httpError(409, 'Keine freie Aufgabe mehr — Split ist voll')
+   group.split.assignments[id] = free.n
+   group.unlocked[free.n] = true
+   return free.n
+}
+
+/** Split-Finale: alle verteilten Aufgaben gelöst → Finale öffnet sich von selbst. */
+function checkSplitFinished(group: GroupRecord): void {
+   const assigned = Object.values(group.split.assignments)
+   if (assigned.length === 0) return
+   const allDone = assigned.every((n) => group.solved[n] !== undefined)
+   if (allDone) {
+      group.settings.finishedAt = group.settings.finishedAt ?? now()
+      group.settings.revealFinale = true
+      group.activePhase = 'finale'
+   }
+}
+
 /** Team folgt gemeinsam: nach Solve auf die nächste offene, ungelöste Station. */
 function advanceActive(group: GroupRecord): void {
    const next = STATIONS.find((s) => group.unlocked[s.n] && group.solved[s.n] === undefined)
@@ -225,11 +268,89 @@ function requireStation(stationNumber: unknown): number {
    return n
 }
 
+function eventSettings(store: StoreShape): EventSettings {
+   const mode: EventMode = store.event?.mode === 'solo' ? 'solo' : 'multi'
+   const rawSolo = typeof store.event?.soloCode === 'string' ? cleanCode(store.event.soloCode) : ''
+   return { mode, soloCode: rawSolo || null, updatedAt: store.event?.updatedAt ?? now() }
+}
+
+/** Aktueller Event-Modus (solo = ein Event, eine Gruppe; multi = viele Gruppen). */
+export async function getEventSettings(): Promise<EventSettings> {
+   const store = await loadStore()
+   return eventSettings(store)
+}
+
+function newestGroupCode(store: StoreShape): string | null {
+   let best: { code: string; createdAt: string } | null = null
+   for (const [code, group] of Object.entries(store.groups)) {
+      const createdAt = typeof group?.createdAt === 'string' ? group.createdAt : ''
+      if (!best || createdAt.localeCompare(best.createdAt) > 0) best = { code, createdAt }
+   }
+   return best?.code ?? null
+}
+
+function makeUniqueCode(store: StoreShape): string {
+   let code = makeCode()
+   while (store.groups[code]) code = makeCode()
+   return code
+}
+
+/**
+ * Event-Modus umschalten (Spielleitung, per Admin-Token geschützt).
+ * Solo ohne soloCode: nimmt die neueste Gruppe oder erstellt eine
+ * (Name via `name` steuerbar). Gibt Modus + Solo-Gruppe zurück.
+ */
+export async function setEventMode(
+   rawMode: unknown,
+   rawSoloCode: unknown = null,
+   adminToken: unknown = null,
+   rawName: unknown = '',
+): Promise<{ event: EventSettings; group: GroupPayload | null }> {
+   const mode: EventMode = rawMode === 'solo' ? 'solo' : rawMode === 'multi' ? 'multi' : (() => { throw httpError(400, 'Unbekannter Event-Modus') })()
+   requireAdminToken(adminToken)
+   return runExclusive(async () => {
+      const store = await loadStore()
+      if (mode === 'multi') {
+         const event: EventSettings = { mode, soloCode: null, updatedAt: now() }
+         store.event = event
+         await saveStore(store)
+         return { event, group: null }
+      }
+
+      let soloCode = cleanCode(rawSoloCode)
+      if (soloCode && !store.groups[soloCode]) throw httpError(404, 'Solo-Gruppe nicht gefunden')
+      if (!soloCode) soloCode = newestGroupCode(store) ?? ''
+      if (!soloCode) {
+         soloCode = makeUniqueCode(store)
+         store.groups[soloCode] = createGroupRecord(soloCode, null, soloCode, String(rawName ?? '') || 'Event-Gruppe')
+      }
+      const event: EventSettings = { mode, soloCode, updatedAt: now() }
+      store.event = event
+      await saveStore(store)
+      return { event, group: groupPayload(normalizeGroup(store.groups[soloCode], soloCode)) }
+   })
+}
+
+/** Solo-Gruppe auflösen — repariert verwaiste soloCode-Verweise (Gruppe gelöscht). */
+function resolveSoloCode(store: StoreShape): string | null {
+   const { soloCode } = eventSettings(store)
+   if (soloCode && store.groups[soloCode]) return soloCode
+   const fallback = newestGroupCode(store)
+   if (fallback) {
+      store.event = { mode: 'solo', soloCode: fallback, updatedAt: now() }
+      return fallback
+   }
+   return null
+}
+
 export async function createGroup(name: unknown = ''): Promise<GroupPayload> {
    return runExclusive(async () => {
       const store = await loadStore()
-      let code = makeCode()
-      while (store.groups[code]) code = makeCode()
+      const event = eventSettings(store)
+      if (event.mode === 'solo') {
+         throw httpError(409, `Solo-Modus aktiv — alle Geräte spielen in Gruppe ${event.soloCode ?? 'der Event-Gruppe'}`)
+      }
+      const code = makeUniqueCode(store)
 
       store.groups[code] = createGroupRecord(code, null, code, String(name ?? ''))
       await saveStore(store)
@@ -261,6 +382,28 @@ export async function autoJoinGroup(rawMemberId: unknown, rawPoolCode: unknown =
 
    return runExclusive(async () => {
       const store = await loadStore()
+
+      // Solo-Modus: ein Event, eine Gruppe — jedes Gerät landet in der
+      // Solo-Gruppe, ohne 3-Geräte-Deckel (gemeinsamer Fortschritt).
+      if (eventSettings(store).mode === 'solo') {
+         let soloCode = resolveSoloCode(store)
+         if (!soloCode) {
+            soloCode = makeUniqueCode(store)
+            store.groups[soloCode] = createGroupRecord(soloCode, null, soloCode, 'Event-Gruppe')
+            store.event = { mode: 'solo', soloCode, updatedAt: now() }
+         }
+         const group = normalizeGroup(store.groups[soloCode], soloCode)
+         if (!group.members.includes(memberId)) {
+            group.members.push(memberId)
+            group.updatedAt = now()
+         }
+         // Split-Modus: späte Geräte bekommen beim Beitritt ihre Aufgabe.
+         if (group.settings.mode === 'split') assignSplit(group, memberId)
+         store.groups[soloCode] = group
+         await saveStore(store)
+         return groupPayload(group)
+      }
+
       const entries = Object.entries(store.groups)
          .map(([code, group]) => [code, normalizeGroup(group, code)] as const)
          .filter(([, group]) => group.poolCode === poolCode)
@@ -279,6 +422,7 @@ export async function autoJoinGroup(rawMemberId: unknown, rawPoolCode: unknown =
          const [code, group] = openEntry
          group.members.push(memberId)
          group.updatedAt = now()
+         if (group.settings.mode === 'split') assignSplit(group, memberId)
          store.groups[code] = group
          await saveStore(store)
          return groupPayload(group)
@@ -304,9 +448,16 @@ export async function joinGroupByCode(rawCode: unknown, rawMemberId: unknown): P
       const store: StoreShape = await loadStore()
       const group = normalizeGroup(store.groups[code], code)
       if (!group.members.includes(memberId)) {
-         if (group.members.length >= MAX_MEMBERS) throw httpError(409, 'Gruppe ist voll (max. 3 Geräte)')
+         // Solo-Modus: kein Geräte-Deckel — alle spielen gemeinsam.
+         if (eventSettings(store).mode !== 'solo' && group.members.length >= MAX_MEMBERS) {
+            throw httpError(409, 'Gruppe ist voll (max. 3 Geräte)')
+         }
          group.members.push(memberId)
          group.updatedAt = now()
+         if (group.settings.mode === 'split') assignSplit(group, memberId)
+      } else if (group.settings.mode === 'split') {
+         // Re-Join ohne Zuweisung (z.B. nach Moduswechsel) heilen.
+         assignSplit(group, memberId)
       }
       store.groups[code] = group
       await saveStore(store)
@@ -326,6 +477,7 @@ export async function resetGroup(rawCode: unknown, adminToken: unknown = null): 
          ...previous,
          solved: {},
          unlocked: defaultUnlocked(),
+         split: { assignments: {} },
          hints: defaultHints(),
          attempts: defaultCounters(),
          errors: defaultCounters(),
@@ -352,6 +504,7 @@ export async function solveStation(
    rawCode: unknown,
    stationNumber: unknown,
    rawValue: unknown,
+   rawMemberId: unknown = null,
 ): Promise<SolveResult> {
    const code = cleanCode(rawCode)
    if (!code) throw httpError(400, 'Gruppen-Code fehlt')
@@ -365,6 +518,15 @@ export async function solveStation(
       const store = await loadStore()
       if (!store.groups[code]) throw httpError(404, 'Gruppe nicht gefunden')
       const group = normalizeGroup(store.groups[code], code)
+      const isSplit = group.settings.mode === 'split'
+
+      // Split-Modus: nur die eigene zugeteilte Aufgabe ist lösbar.
+      if (isSplit) {
+         const memberId = cleanMemberId(rawMemberId)
+         const mine = memberId ? group.split.assignments[memberId] : undefined
+         if (mine === undefined) throw httpError(403, 'Keine Aufgabe zugeteilt — bitte neu beitreten')
+         if (mine !== station.n) throw httpError(403, 'Das ist nicht deine Aufgabe')
+      }
 
       // Bereits gelöst: idempotent, kein weiterer Versuchszähler.
       if (group.solved[station.n] !== undefined) {
@@ -386,9 +548,13 @@ export async function solveStation(
       }
 
       group.solved[station.n] = value
-      group.unlocked = nextUnlocked(group.solved, group.settings.mode, group.unlocked)
-      checkFinished(group)
-      if (group.activeStation === station.n) advanceActive(group)
+      if (isSplit) {
+         checkSplitFinished(group)
+      } else {
+         group.unlocked = nextUnlocked(group.solved, group.settings.mode, group.unlocked)
+         checkFinished(group)
+         if (group.activeStation === station.n) advanceActive(group)
+      }
       group.updatedAt = now()
       store.groups[code] = group
       await saveStore(store)
@@ -424,7 +590,7 @@ export async function updateGroup(rawCode: unknown, action: string, body: Update
       const stamp = now()
 
       if (action === 'settings') {
-         const nextMode: GameMode = (['linear', 'open', 'manual'] as GameMode[]).includes(body.mode as GameMode)
+         const nextMode: GameMode = (['linear', 'open', 'manual', 'split'] as GameMode[]).includes(body.mode as GameMode)
             ? (body.mode as GameMode)
             : group.settings.mode
          const timerMinutes = Number(body.timerMinutes)
@@ -437,6 +603,11 @@ export async function updateGroup(rawCode: unknown, action: string, body: Update
                   : group.settings.timerMinutes,
          }
          group.unlocked = nextUnlocked(group.solved, group.settings.mode, group.unlocked)
+         // Split-Einstieg: alle bisherigen Mitglieder bekommen sofort
+         // automatisch je eine Aufgabe (Beitrittsreihenfolge → Station 1…k).
+         if (nextMode === 'split') {
+            for (const memberId of group.members) assignSplit(group, memberId)
+         }
       }
 
       if (action === 'rename') {
@@ -535,9 +706,13 @@ export async function updateGroup(rawCode: unknown, action: string, body: Update
          const target = STATIONS.find((item) => item.n === station)
          if (approved && target?.kind === 'upload' && group.solved[station] === undefined) {
             group.solved[station] = String(target.solution)
-            group.unlocked = nextUnlocked(group.solved, group.settings.mode, group.unlocked)
-            checkFinished(group)
-            if (group.activeStation === station) advanceActive(group)
+            if (group.settings.mode === 'split') {
+               checkSplitFinished(group)
+            } else {
+               group.unlocked = nextUnlocked(group.solved, group.settings.mode, group.unlocked)
+               checkFinished(group)
+               if (group.activeStation === station) advanceActive(group)
+            }
          }
       }
 
@@ -548,6 +723,10 @@ export async function updateGroup(rawCode: unknown, action: string, body: Update
       if (action === 'navigate') {
          // Team-Navigation im Follow-Modus: alle Geräte teilen activeStation/activePhase.
          const phase = body.phase === 'finale' ? 'finale' : 'play'
+         // Split: Das Finale öffnet sich nur automatisch (alle Aufgaben gelöst).
+         if (phase === 'finale' && group.settings.mode === 'split' && !group.settings.revealFinale) {
+            throw httpError(403, 'Finale öffnet sich automatisch, sobald alle Aufgaben gelöst sind')
+         }
          if (phase === 'finale') {
             group.activePhase = 'finale'
          } else {
