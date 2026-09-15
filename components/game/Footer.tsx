@@ -4,12 +4,11 @@ import Link from 'next/link'
 
 interface FooterProps {
    solved: Record<number, string>
-   onReset: () => void
    groupCode: string
    groupInfo: { memberCount: number; maxMembers: number }
 }
 
-export default function Footer({ solved, onReset, groupCode, groupInfo }: FooterProps) {
+export default function Footer({ solved, groupCode, groupInfo }: FooterProps) {
    return (
       <div className="footer">
          <span>© Miss Anti-lomene</span>
@@ -24,9 +23,6 @@ export default function Footer({ solved, onReset, groupCode, groupInfo }: Footer
          <Link className="footer-link" href={`/projector/${groupCode}`}>
             Beamer
          </Link>
-         <button type="button" className="footer-reset" onClick={onReset}>
-            Spielstand zurücksetzen
-         </button>
       </div>
    )
 }

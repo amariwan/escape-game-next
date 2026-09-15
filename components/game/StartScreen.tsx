@@ -35,12 +35,11 @@ declare global {
 
 interface StartScreenProps {
    onStart: () => void
-   onReset: () => void
    solvedCount: number
    groupCode: string
 }
 
-export default function StartScreen({ onStart, onReset, solvedCount, groupCode }: StartScreenProps) {
+export default function StartScreen({ onStart, solvedCount, groupCode }: StartScreenProps) {
    const playerRef = useRef<YouTubePlayer | null>(null)
    const startRef = useRef(onStart)
    const [playerStatus, setPlayerStatus] = useState('video lauft')
@@ -138,9 +137,7 @@ export default function StartScreen({ onStart, onReset, solvedCount, groupCode }
             </div>
          </div>
          {solvedCount > 0 && (
-            <button type="button" className="link" onClick={onReset}>
-               Spielstand zurücksetzen
-            </button>
+            <p className="prompt center">Spielstand {solvedCount}/20 — weiter geht&apos;s beim Team-Stand.</p>
          )}
       </div>
    )
